@@ -1,0 +1,33 @@
+{
+  "configurations": [
+    {
+      "name": "gdb",
+      "type": "cppdbg",
+      "request": "launch",
+// use windows unc path because cygwin gdb does not understand relative paths on commandline
+// change to your program executable path
+      "program": "//localhost/c$/tmp/${fileBasenameNoExtension}/build/${fileBasenameNoExtension}.exe",
+      "args": [],
+// set stopAtEntry to break on main
+      "stopAtEntry": true,
+// need externalConsole for program output to appear and for interactive input
+      "externalConsole": true,
+      "cwd": "${fileDirname}",
+      "windows": {
+        "MIMode": "gdb",
+// change to your cygwin gdb executable path
+        "miDebuggerPath": "c:/cygwin/bin/gdb.exe",
+// set gdb commandline options here
+        "miDebuggerArgs": "-q -ex 'set verbose off'"
+      },
+// need cygwin gcc-debuginfo package for C++ pretty printers to work in gdb
+      "setupCommands": [
+        {
+          "text": "-enable-pretty-printing",
+// don't want silent errors
+          "ignoreFailures": false
+        }
+      ]
+    }
+  ]
+}
