@@ -39,6 +39,24 @@ function usage {
   echo "wsl_interrupt_stats.sh -n 10 -f 5"
 }
 
+function log {
+  local line=$1
+  echo "$(TZ=$timezone date +%F_%T.%6N_%Z): $line"
+}
+
+function printSystemInfo {
+  log "System info"
+
+  log "uname"
+  uname -srvmpio
+  echo
+
+  log "WSL version info"
+  $win32Dir/wsl.exe --version
+  echo
+
+}
+
 function initInterruptStats {
   local epochMicro=$(date +%s.%6N)
   read -a cpus
@@ -49,33 +67,34 @@ function initInterruptStats {
     local irq=${fields[0]%:}
     irqIds+=($irq)
     irqNames[$irq]=${fields[*]:$numCpus + 1}
-# create dynamic arrays per IRQ to hold count:timestamp
+# create dynamic arrays per IRQ to hold counts
     declare -g -a irqCounts_$irq
 # can only use dynamic arrays through nameref
     local -n arrayRef=irqCounts_$irq
     arrayRef=(${fields[*]:1:$numCpus})
-    arrayRef=(${arrayRef[*]/%/:$epochMicro})
   done
 }
 
-function printInterruptStats {
-  echo "cpu_count $numCpus"
-
+function printInterruptCounts {
+  log "IRQ info"
   local irq
   for irq in ${irqIds[*]}; do
     echo "irq_id $irq irq_name \"${irqNames[$irq]}\""
   done
   echo
-  echo "Initial IRQ counts"
-  echo "iteration 0 time $(TZ=$timezone date +%F_%T.%6N_%Z)"
+  log "Iteration $iteration: Initial IRQ counts"
+  echo "cpu_count $numCpus"
   for irq in ${irqIds[*]}; do
     local -n arrayRef=irqCounts_$irq
-    echo "irq_id $irq irq_counts ${arrayRef[*]/%:*}"
+    echo "irq_id $irq irq_counts ${arrayRef[*]}"
   done
+  echo
 }
 
-function getInterruptStats {
-  local epochMicro=$(date +%s.%N)
+function printInterruptStats {
+  log "Iteration $iteration: IRQ diff stats"
+  local intervalSeconds=$(awk "BEGIN {printf \"%.6f\", $epochMicro - $prevEpochMicro}")
+  echo "interval_sec $intervalSeconds"
   IFS= read
 
   local -a fields
@@ -87,24 +106,30 @@ function getInterruptStats {
     local i
     for ((i = 0; i < ${#irqCounts[*]}; ++i)); do
       local newCount=${irqCounts[i]}
-      local oldCount=${arrayRef[i]%%:*}
-      local prevTime=${arrayRef[i]##*:}
+      local oldCount=${arrayRef[i]}
       if [[ -z $oldCount ]]; then
-        arrayRef[i]=$newCount:$epochMicro
+        arrayRef[i]=$newCount
         continue
       fi
       if ((newCount == oldCount)); then
         continue
       fi
-      arrayRef[i]=$newCount:$epochMicro
+      arrayRef[i]=$newCount
       local change=$((newCount - oldCount))
-      local pctChange=$(awk "BEGIN {printf \"%.2f\", $change / $oldCount * 100.}")
-      local intervalSeconds=$(awk "BEGIN {printf \"%.6f\", $epochMicro - $prevTime}")
+      local pctChange=$(awk "BEGIN {if($oldCount == 0) { print Inf; exit } printf \"%.2f\", $change / $oldCount * 100.}")
       local ratePerSecond=$(awk "BEGIN {printf \"%.2f\", $change / $intervalSeconds}")
-      echo "irq.cpu $irq.$i rate_per_sec $ratePerSecond change $change pct_change $pctChange old_count $oldCount new_count $newCount interval_sec $intervalSeconds"
+      echo "irq.cpu $irq.$i rate_per_sec $ratePerSecond change $change pct_change $pctChange old_count $oldCount new_count $newCount"
 
     done
   done
+  echo
+}
+
+function printTop {
+  local numLines=$((numTop + 7))
+  log "Iteration $iteration: top"
+  top -b -n1 | head -$numLines
+  echo
 }
 
 while getopts "f:hn:z:" opt; do
@@ -119,28 +144,39 @@ while getopts "f:hn:z:" opt; do
 done
 shift $((OPTIND-1))
 
+: ${win32Dir:=/mnt/c/windows/system32}
 : ${freqSec:=10}
 : ${numIters:=0}
 : ${timezone:=America/Chicago}
+: ${numTop:=5}
+
+# get UTF-8 output from Windows wsl.exe command
+export WSL_UTF8=1
+export WSLENV=WSL_UTF8
 
 declare -a cpus
 declare numCpus=0
 declare -a irqIds
 declare -A irqNames
 
-# first run
-initInterruptStats </proc/interrupts
-printInterruptStats
-((numIters == 1)) && exit
+log "Start WSL interrupt stats, frequency_secs $freqSec, num_iterations $numIters"
 echo
+printSystemInfo
 
-sleep $freqSec
+# first run
+declare iteration=0
+declare epochMicro=$(date +%s.%N)
+
+initInterruptStats </proc/interrupts
+printInterruptCounts
+((numIters == 1)) && exit
 
 # keep running
-for ((i = 1; numIters == 0 || i < numIters; ++i)); do
-  echo "iteration $i time $(TZ=$timezone date +%F_%T.%6N_%Z)"
-  getInterruptStats </proc/interrupts
-  echo
+for ((iteration = 1; numIters == 0 || iteration < numIters; ++iteration)); do
   sleep $freqSec
+  prevEpochMicro=$epochMicro
+  epochMicro=$(date +%s.%N)
+  printInterruptStats </proc/interrupts
+  printTop
 done
 
