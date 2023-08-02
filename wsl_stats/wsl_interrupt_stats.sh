@@ -58,7 +58,7 @@ function printSystemInfo {
 }
 
 function initInterruptStats {
-  epochMicro=$(date +%s.%6N)
+  local epochMicro=$(date +%s.%6N)
   read -a cpus
   numCpus=${#cpus[*]}
 
@@ -93,6 +93,8 @@ function printInterruptCounts {
 
 function printInterruptStats {
   log "Iteration $iteration: IRQ diff stats"
+  local intervalSeconds=$(awk "BEGIN {printf \"%.6f\", $epochMicro - $prevEpochMicro}")
+  echo "interval_sec $intervalSeconds"
   IFS= read
 
   local -a fields
@@ -114,21 +116,12 @@ function printInterruptStats {
       fi
       arrayRef[i]=$newCount
       local change=$((newCount - oldCount))
-      local pctChange=$(awk -v oldCount=$oldCount -v newCount=$newCount -v change=$change '
-        BEGIN {
-          if(oldCount == 0) {
-            print "Inf"
-            exit
-          }
-          printf "%.2f", change / oldCount * 100.
-        }'
-      )
+      local pctChange=$(awk "BEGIN {if($oldCount == 0) { print Inf; exit } printf \"%.2f\", $change / $oldCount * 100.}")
       local ratePerSecond=$(awk "BEGIN {printf \"%.2f\", $change / $intervalSeconds}")
-      echo "irq.cpu $irq.$i rate_per_sec $ratePerSecond pct_change $pctChange change $change old_count $oldCount new_count $newCount"
+      echo "irq.cpu $irq.$i rate_per_sec $ratePerSecond change $change pct_change $pctChange old_count $oldCount new_count $newCount"
 
     done
-  done |
-  sort -k4,4nr
+  done
   echo
 }
 
@@ -136,15 +129,6 @@ function printTop {
   local numLines=$((numTop + 7))
   log "Iteration $iteration: top"
   top -b -n1 | head -$numLines
-  echo
-}
-
-function printIterationInfo {
-  log "Iteration $iteration:"
-  local -g prevEpochMicro=$epochMicro
-  epochMicro=$(date +%s.%6N)
-  local -g intervalSeconds=$(awk "BEGIN {printf \"%.6f\", $epochMicro - $prevEpochMicro}")
-  echo "interval_sec $intervalSeconds"
   echo
 }
 
@@ -181,7 +165,7 @@ printSystemInfo
 
 # first run
 declare iteration=0
-declare epochMicro=$(date +%s.%6N)
+declare epochMicro=$(date +%s.%N)
 
 initInterruptStats </proc/interrupts
 printInterruptCounts
@@ -190,7 +174,8 @@ printInterruptCounts
 # keep running
 for ((iteration = 1; numIters == 0 || iteration < numIters; ++iteration)); do
   sleep $freqSec
-  printIterationInfo
+  prevEpochMicro=$epochMicro
+  epochMicro=$(date +%s.%N)
   printInterruptStats </proc/interrupts
   printTop
 done
