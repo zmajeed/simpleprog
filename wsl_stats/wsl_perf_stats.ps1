@@ -39,6 +39,7 @@ $cmdCount = @{}
 
 $numIters = 10
 
+function top {
 get-counter -max $numIters "\process(*)\% processor time","\process(*)\id process" -erroraction silentlycontinue | select -expand countersamples | &{ process {
   if($_.instancename -eq "_total") {
     return
@@ -80,6 +81,11 @@ foreach($cmd in $cpupercent2.keys) {
 
 get-counter -max 1 "\process(vmmem*)\% processor time" -erroraction silentlycontinue | select -expand countersamples
 
+}
+
+function printHypervStats {
+
+
 $hypervStats = get-counter -listset "*hyper-v*" | select -expand paths
 
 get-counter -max 1 $hypervStats -erroraction silentlycontinue | select -expand countersamples | & { process {
@@ -99,3 +105,8 @@ get-counter -max 1 $hypervStats -erroraction silentlycontinue | select -expand c
     $statName + "`t" + [math]::round($_.cookedvalue, 3) + "`t" + $instanceId
   }
 }}
+
+}
+
+top
+printHypervStats
