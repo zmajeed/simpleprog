@@ -105,7 +105,7 @@ function printHypervStats {
 
 $hypervStats = get-counter -listset $statPatterns | select -expand paths
 $hypervStats | &{ process {
-  $listedPathPattern = "^\\(((?<group>[^\\]+)(?<star>\(\*\)))|((?<group>[^\\]+)))\\(?<name>[^\\]+)$" 
+  $listedPathPattern = "^\\(((?<group>[^\\]+)\((?<star>\*)\))|(?<group>[^\\]+))\\(?<name>[^\\]+)$" 
   if(-not ($_ -match $listedPathPattern)) {
     [console]::error.writeline("failed regex match for listed stat path ""$_""") 
     exit 1
@@ -144,11 +144,11 @@ $statStream = start-threadjob {
   get-counter $using:hypervStats @opts -erroraction silentlycontinue | select -expand countersamples | &{ process {
     if($using:onlyTotals) {
       if(-not ($_.instancename -in ("_total", ""))) {
-				return
+				#return
 			}
 		}
-    #$reportedPathPattern = "^\\\\[^\\]+\\(?<group>[^\\(]+)(\((?<source>[^)]+)\))?\\(?<name>[^\\]+)$" 
-    $reportedPathPattern = "^^\\\\[^\\]+\\(((?<group>[^\\]+)(?<source>\(\*\)))|((?<group>[^\\]+)))\\(?<name>[^\\]+)$" 
+# alternation with shortcircuit hopefully works, first choice matches multisource group with source in parentheses, second choice matches single-source group without any parentheses, first choice allows multisource group itself to have parentheses, second choice assumes unique-source group cannot end in parentheses
+    $reportedPathPattern = "^\\\\(?<host>[^\\]+)\\(((?<group>[^\\]+)\((?<source>[^)]+)\))|(?<group>[^\\]+))\\(?<name>[^\\]+)$" 
     if(-not ($_.path -match $reportedPathPattern)) {
       return [pscustomobject]@{
         path = $_.path;
@@ -159,6 +159,8 @@ $statStream = start-threadjob {
 	  if(-not ($using:statsLookup).containskey($key)) {
       return [pscustomobject]@{
         path = $_.path;
+				group = $matches.group
+				name = $matches.name
         error = "failed stat lookup for key ""$key"""
       }
 	  }
