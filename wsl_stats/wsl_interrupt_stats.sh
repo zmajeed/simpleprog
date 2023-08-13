@@ -95,8 +95,10 @@ function printInterruptStats {
   log "Iteration $iteration: IRQ diff stats"
   IFS= read
 
-  local -a fields
-  while read -a fields; do
+  local outstr=""
+  local line
+  while IFS= read line; do
+    local -a fields=($line)
     local irq=${fields[0]%:}
     local -a irqCounts=(${fields[*]:1:$numCpus})
 # need nameref to access dynamic arrays per IRQ
@@ -124,12 +126,14 @@ function printInterruptStats {
         }'
       )
       local ratePerSecond=$(awk "BEGIN {printf \"%.2f\", $change / $intervalSeconds}")
-      echo "irq.cpu $irq.$i rate_per_sec $ratePerSecond pct_change $pctChange change $change old_count $oldCount new_count $newCount"
+      outstr+="irq.cpu $irq.$i rate_per_sec $ratePerSecond pct_change $pctChange change $change old_count $oldCount new_count $newCount"
+      outstr+=$'\n'
 
     done
-  done |
+  done
+
+  echo "$outstr" |
   sort -k4,4nr
-  echo
 }
 
 function printTop {
@@ -148,8 +152,9 @@ function printIterationInfo {
   echo
 }
 
-while getopts "f:hn:z:" opt; do
+while getopts "df:hn:z:" opt; do
   case $opt in
+    d) debug=true;;
     f) freqSec=$OPTARG;;
     n) numIters=$OPTARG;;
     z) timezone=$OPTARG;;
@@ -160,6 +165,7 @@ while getopts "f:hn:z:" opt; do
 done
 shift $((OPTIND-1))
 
+: ${debug:=false}
 : ${win32Dir:=/mnt/c/windows/system32}
 : ${freqSec:=10}
 : ${numIters:=0}
