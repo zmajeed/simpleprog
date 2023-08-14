@@ -145,7 +145,7 @@ function printInterruptStats {
             print "Inf"
             exit
           }
-					printf "%.2f", (newRate - oldRate) / oldRate * 100.
+          printf "%.2f", (newRate - oldRate) / oldRate * 100.
         }'
       )
 
