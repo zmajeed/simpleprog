@@ -69,9 +69,14 @@ function initInterruptStats {
     irqNames[$irq]=${fields[*]:$numCpus + 1}
 # create dynamic arrays per IRQ to hold counts
     declare -g -a irqCounts_$irq
+    declare -g -a irqRates_$irq
 # can only use dynamic arrays through nameref
-    local -n arrayRef=irqCounts_$irq
-    arrayRef=(${fields[*]:1:$numCpus})
+    local -n countsRef=irqCounts_$irq
+    countsRef=(${fields[*]:1:$numCpus})
+
+# initialize rate per second array to zeros for same number of entries as in counts array
+    local -n ratesRef=irqRates_$irq
+    ratesRef=(${countsRef[*]/*/0})
   done
 }
 
@@ -91,9 +96,9 @@ function printInterruptCounts {
   printf "%-7s %s\n" irq counts_by_cpu
   printf "%-7s %s\n" --- -------------
   for irq in ${irqIds[*]}; do
-    local -n arrayRef=irqCounts_$irq
+    local -n countsRef=irqCounts_$irq
     printf "%-7s" $irq
-    printf " %s" ${arrayRef[*]}
+    printf " %s" ${countsRef[*]}
     echo
   done
   echo
@@ -110,38 +115,48 @@ function printInterruptStats {
     local irq=${fields[0]%:}
     local -a irqCounts=(${fields[*]:1:$numCpus})
 # need nameref to access dynamic arrays per IRQ
-    local -n arrayRef=irqCounts_$irq
+    local -n countsRef=irqCounts_$irq
+    local -n ratesRef=irqRates_$irq
     local i
     for ((i = 0; i < ${#irqCounts[*]}; ++i)); do
       local newCount=${irqCounts[i]}
-      local oldCount=${arrayRef[i]}
+      local oldCount=${countsRef[i]}
       if [[ -z $oldCount ]]; then
-        arrayRef[i]=$newCount
+        countsRef[i]=$newCount
         continue
       fi
       if ((newCount == oldCount)); then
+        ratesRef[i]=0
         continue
       fi
-      arrayRef[i]=$newCount
+      countsRef[i]=$newCount
       local change=$((newCount - oldCount))
-      local pctChange=$(awk -v oldCount=$oldCount -v newCount=$newCount -v change=$change '
+
+      local ratePerSecond=$(awk "BEGIN {printf \"%.2f\", $change / $intervalSeconds}")
+
+      local oldRate=${ratesRef[i]}
+      ratesRef[i]=$ratePerSecond
+
+# percent change in count not useful since counts are cumulative and percentage goes to zero over time
+# instead see whether rate went up or down
+      local pctChangeInRate=$(awk -v oldRate=$oldRate -v newRate=$ratePerSecond '
         BEGIN {
-          if(oldCount == 0) {
+          if(oldRate == 0) {
             print "Inf"
             exit
           }
-          printf "%.2f", change / oldCount * 100.
+					printf "%.2f", (newRate - oldRate) / oldRate * 100.
         }'
       )
-      local ratePerSecond=$(awk "BEGIN {printf \"%.2f\", $change / $intervalSeconds}")
-      printf -v vals "%-9s  %15s %15s %15s %15s %15s\n" "$irq.$i" $ratePerSecond $pctChange $change $newCount $oldCount
+
+      printf -v vals "%-9s  %15s %20s %15s %15s %15s\n" "$irq.$i" $ratePerSecond $pctChangeInRate $change $newCount $oldCount
       outstr+=$vals
 
     done
   done
 
-  printf "%-9s  %15s %15s %15s %15s %15s\n" irq.cpu rate_per_sec pct_change change new_count old_count
-  printf "%-9s  %15s %15s %15s %15s %15s\n" ------- ------------ ---------- ------ --------- ---------
+  printf "%-9s  %15s %20s %15s %15s %15s\n" irq_cpu rate_per_sec pct_change_in_rate change new_count old_count
+  printf "%-9s  %15s %20s %15s %15s %15s\n" ------- ------------ ------------------ ------ --------- ---------
   echo "$outstr" |
   sort -k2,2nr
 }
@@ -149,7 +164,7 @@ function printInterruptStats {
 function printTop {
   local numLines=$((numTop + 7))
   log "Iteration $iteration: top"
-  top -b -n1 | head -$numLines
+  top -b -n1 -w120 | head -$numLines
   echo
 }
 
