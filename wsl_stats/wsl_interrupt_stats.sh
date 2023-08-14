@@ -78,15 +78,23 @@ function initInterruptStats {
 function printInterruptCounts {
   log "IRQ info"
   local irq
+  printf "%-7s %s\n" irq name
+  printf "%-7s %s\n" --- ----
   for irq in ${irqIds[*]}; do
-    echo "irq_id $irq irq_name \"${irqNames[$irq]}\""
+    printf "%-7s" $irq
+    printf " %s" ${irqNames[$irq]}
+    echo
   done
   echo
   log "Iteration $iteration: Initial IRQ counts"
   echo "cpu_count $numCpus"
+  printf "%-7s %s\n" irq counts_by_cpu
+  printf "%-7s %s\n" --- -------------
   for irq in ${irqIds[*]}; do
     local -n arrayRef=irqCounts_$irq
-    echo "irq_id $irq irq_counts ${arrayRef[*]}"
+    printf "%-7s" $irq
+    printf " %s" ${arrayRef[*]}
+    echo
   done
   echo
 }
@@ -126,14 +134,16 @@ function printInterruptStats {
         }'
       )
       local ratePerSecond=$(awk "BEGIN {printf \"%.2f\", $change / $intervalSeconds}")
-      outstr+="irq.cpu $irq.$i rate_per_sec $ratePerSecond pct_change $pctChange change $change old_count $oldCount new_count $newCount"
-      outstr+=$'\n'
+      printf -v vals "%-9s  %15s %15s %15s %15s %15s\n" "$irq.$i" $ratePerSecond $pctChange $change $newCount $oldCount
+      outstr+=$vals
 
     done
   done
 
+  printf "%-9s  %15s %15s %15s %15s %15s\n" irq.cpu rate_per_sec pct_change change new_count old_count
+  printf "%-9s  %15s %15s %15s %15s %15s\n" ------- ------------ ---------- ------ --------- ---------
   echo "$outstr" |
-  sort -k4,4nr
+  sort -k2,2nr
 }
 
 function printTop {
