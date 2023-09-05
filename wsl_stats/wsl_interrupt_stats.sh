@@ -55,6 +55,14 @@ function printSystemInfo {
   $win32Dir/wsl.exe --version
   echo
 
+  log "Available clocksource"
+  head -v $availableClockSource
+  echo
+
+  log "Current clocksource"
+  head -v $currentClockSource
+  echo
+
 }
 
 function initInterruptStats {
@@ -78,6 +86,14 @@ function initInterruptStats {
     local -n ratesRef=irqRates_$irq
     ratesRef=(${countsRef[*]/*/0})
   done
+
+  if [[ $(<$currentClockSource) != tsc ]]; then
+    if ! echo "tsc" >$currentClockSource; then
+      log >&2 "Initialization error: failed to reset clocksource to tsc"
+      head -v $currentClockSource
+      exit 1
+    fi
+  fi
 }
 
 function printInterruptCounts {
@@ -168,17 +184,107 @@ function printTop {
   echo
 }
 
+function doHVSAction {
+  local actionStatus=$(jobs -nl)
+
+  if [[ -n $actionStatus ]] && [[ ! $actionStatus =~ " Done "|" Exit " ]]; then
+    log "Iteration $iteration: Skip hvs_alert_actions because previous run of $hvsAction has not completed"
+    echo "$actionStatus"
+    echo
+    return
+  fi
+
+  local hypervClocksourceTimeLimit=120
+  if [[ $(<$currentClockSource) == hyperv_clocksource_tsc_page ]]; then
+    local hypervClocksourceEnabledSec=$((SECONDS - hypervClocksourceEnabledAt))
+    if ((hypervClocksourceEnabledSec < hypervClocksourceTimeLimit)); then
+      log "Iteration $iteration: Skip hvs_alert_actions because clocksource updated to hyperv_clocksource_tsc_page $hypervClocksourceEnabledSec seconds ago"
+    else
+      log "Iteration $iteration: hvs_alert_actions: Reset clocksource back to tsc after $hypervClocksourceEnabledSec seconds"
+      if ! echo "tsc" >$currentClockSource || [[ $(<$currentClockSource) != tsc ]]; then
+        log >&2 "hvs_alert_actions: error: failed to reset clocksource to tsc"
+      else
+        unset -v hypervClocksourceEnabledAt
+      fi
+      head -v $currentClockSource
+    fi
+    echo
+    return
+  fi
+
+  log "Iteration $iteration: Run hvs_alert_actions"
+  echo
+
+  log "Iteration $iteration: hvs_alert_actions: timer_list before changing current clocksource"
+  cat /proc/timer_list
+  echo
+
+  log "Iteration $iteration: hvs_alert_actions: Change current clocksource to hyperv_clocksource_tsc_page"
+  if ! echo "hyperv_clocksource_tsc_page" >$currentClockSource || [[ $(<$currentClockSource) != hyperv_clocksource_tsc_page ]]; then
+    log >&2 "Iteration $iteration: hvs_alert_actions: error: failed to reset clocksource to hyperv_clocksource_tsc_page"
+  else
+    declare -g hypervClocksourceEnabledAt=$SECONDS
+  fi
+  head -v $currentClockSource
+  echo
+
+  log "Iteration $iteration: hvs_alert_actions: timer_list after changing current clocksource"
+  cat /proc/timer_list
+  echo
+
+  if [[ -x $hvsAction ]]; then
+    local hvsActionLog=hvsaction.iteration.$iteration.$(TZ=$timezone date +%Y%m%d_%H%M%S.%3N_%Z).log
+    stdbuf -oL $hvsAction >$hvsActionLog 2>&1&
+    local hvsActionPid=$!
+    log "Iteration $iteration: hvs_alert_actions: Run $hvsAction pid $hvsActionPid log $hvsActionLog"
+    jobs -nl
+    ls -l $hvsActionLog
+    echo
+  fi
+
+  log "Iteration $iteration: Done hvs_alert_actions"
+
+}
+
+function hvsAlert {
+  local i
+  for ((i = 0; i < ${#irqRates_HVS[*]}; ++i)); do
+    (( ${irqRates_HVS[i]%%.*} < hvsRateThreshold )) && continue
+    log "Iteration $iteration: HVS.$i IRQ rate ${irqRates_HVS[i]} exceeds alert threshold $hvsRateThreshold"
+    doHVSAction
+    break
+  done
+}
+
+function alertActions {
+  hvsAlert
+}
+
 function printIterationInfo {
   log "Iteration $iteration:"
   local -g prevEpochMicro=$epochMicro
   epochMicro=$(date +%s.%6N)
   local -g intervalSeconds=$(awk "BEGIN {printf \"%.6f\", $epochMicro - $prevEpochMicro}")
   echo "interval_sec $intervalSeconds"
+
+  local batteryCapacitySource=/sys/class/power_supply/BAT1/capacity
+  if [[ -e $batteryCapacitySource ]]; then
+    local batteryPctFull=$(<$batteryCapacitySource)
+    echo "battery_pct_full $batteryPctFull"
+  fi
+
+  echo "current_clocksource $(<$currentClockSource)"
+
   echo
 }
 
-while getopts "df:hn:z:" opt; do
+while getopts "a:df:hn:z:" opt; do
   case $opt in
+    a) actionParams=(${OPTARG//:/ })
+      hvsAction=${actionParams[0]}
+      hvsRateThreshold=${actionParams[1]}
+      hvsActionBackoffSec=${actionParams[2]}
+      ;;
     d) debug=true;;
     f) freqSec=$OPTARG;;
     n) numIters=$OPTARG;;
@@ -196,17 +302,30 @@ shift $((OPTIND-1))
 : ${numIters:=0}
 : ${timezone:=America/Chicago}
 : ${numTop:=5}
+: ${hvsRateThreshold:=10}
+
+if [[ -n $hvsAction ]]; then
+  hvsAction=$(dirname ${BASH_SOURCE[0]})/$hvsAction
+  if [[ ! -x $hvsAction ]]; then
+    log >&2 "error: Provided HVS action $hvsAction is not executable"
+    usage
+    exit 1
+  fi
+fi
 
 # get UTF-8 output from Windows wsl.exe command
 export WSL_UTF8=1
 export WSLENV=WSL_UTF8
+
+availableClockSource=/sys/devices/system/clocksource/clocksource0/available_clocksource
+currentClockSource=/sys/devices/system/clocksource/clocksource0/current_clocksource
 
 declare -a cpus
 declare numCpus=0
 declare -a irqIds
 declare -A irqNames
 
-log "Start WSL interrupt stats, frequency_secs $freqSec, num_iterations $numIters"
+log "Start WSL interrupt stats, frequency_secs $freqSec, num_iterations $numIters, hvs_rate_threshold $hvsRateThreshold"
 echo
 printSystemInfo
 
@@ -224,5 +343,6 @@ for ((iteration = 1; numIters == 0 || iteration < numIters; ++iteration)); do
   printIterationInfo
   printInterruptStats </proc/interrupts
   printTop
+  alertActions
 done
 

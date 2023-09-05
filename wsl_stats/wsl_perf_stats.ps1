@@ -24,6 +24,10 @@
 # SOFTWARE.
 ################################################################################
 
+#requires -version 6
+
+using namespace system.collections.generic
+
 param (
 $f = 10,
 $n = 0,
@@ -32,9 +36,7 @@ $t = $true
 
 $global:formatenumerationlimit=-1
 # disable ansi color escapes in output
-if($psversiontable.psversion.major -gt 6) {
-  $psstyle.outputrendering = "plaintext"
-}
+$psstyle.outputrendering = "plaintext"
 
 $numIters = $n
 $freqSec = $f
@@ -43,16 +45,18 @@ $onlyTotals = $t
 "numIters $numIters freqSec $freqSec"
 
 $numCpus = [environment]::processorcount
+"cpus $numCpus"
 
 $cpupercent = @{}
 $cpupercent2 = @{}
 $pids = @{}
 $cmdCount = @{}
 
-$numIters = 10
+new-variable timestamp -option allscope
 
 function top {
-get-counter -max $numIters "\process(*)\% processor time","\process(*)\id process" -erroraction silentlycontinue | select -expand countersamples | &{ process {
+
+  get-counter -max 10 "\process(*)\% processor time","\process(*)\id process" -erroraction silentlycontinue | select -expand countersamples | &{ process {
   if($_.instancename -eq "_total") {
     return
   }
@@ -87,151 +91,178 @@ foreach($cmd in $cpupercent.keys) {
   }
 }
 
+<#
 foreach($cmd in $cpupercent2.keys) {
   $cmd + " " + [math]::round($cpupercent2[$cmd], 2)
 }
+#>
 
-get-counter -max 1 "\process(vmmem*)\% processor time" -erroraction silentlycontinue | select -expand countersamples
+$cpupercent3 = [list[pscustomobject]]@()
+$cpupercent2.getenumerator() | &{ process { $cpupercent3.add([pscustomobject]@{cmd = $_.key; pct_cpu = $_.value}) }}
+
+$cpupercent3 |
+sort pct_cpu -descending
+
+#get-counter -max 3 "\process(vmmem*)\% processor time" -erroraction silentlycontinue | select -expand countersamples | fl *
 
 }
 
+
 $statsLookup = @{}
+set-variable statsLookup -option allscope
 $statPatterns = "*hyper-v*" 
-#$statPatterns = "*hyper-v*processor*" 
 $statId = 0
 
-function printHypervStats {
+function getStatNames {
 
+get-counter -listset $statPatterns |
+select -expand paths |
+&{ process {
 
-$hypervStats = get-counter -listset $statPatterns | select -expand paths
-$hypervStats | &{ process {
+# stat paths look like
+# \Hyper-V Hypervisor\Logical Processors
+# \Hyper-V Hypervisor Logical Processor(*)\Total Interrupts/sec
+# \Hyper-V Virtual IDE Controller (Emulated)(*)\Write Bytes/sec
+# path has group segment and name segment separated by backslash
+# star in parentheses (*) at end of group segment means the stat is reported by multiple sources
   $listedPathPattern = "^\\(((?<group>[^\\]+)\((?<star>\*)\))|(?<group>[^\\]+))\\(?<name>[^\\]+)$" 
   if(-not ($_ -match $listedPathPattern)) {
     [console]::error.writeline("failed regex match for listed stat path ""$_""") 
     exit 1
-	}
-  #"stat name ""$($matches.name)"" group ""$($matches.group)"" star ""$($matches.star)"""
+  }
   $key = $matches.group + "\" + $matches.name
   $statsLookup[$key] = [pscustomobject]@{
     index = $statId++
-    name = $matches.name;
-    group = $matches.group;
-    sources = if($matches.star -eq "(*)") {"multiple"} else {"unique"};
-    lastVals = @{};
+    name = $matches.name
+    group = $matches.group
+    source = if($matches.star -ne $null) {"multiple"} else {"unique"}
+    lastVals = @{}
+    path = $_
   }
 
 }}
 
-				<#
-$opts = @{sampleinterval = $using:freqSec}
-if($using:numIters -eq 0) {
-  $opts.continuous = $true
-} else {
-  $opts.max = $using:numIters
 }
-$opts
-#>
-#get-counter @opts $using:hypervStats -erroraction silentlycontinue | select -expand countersamples | &{ process {
 
-#get-counter -max 1 $using:hypervStats -erroraction silentlycontinue | select -expand countersamples | &{ process {
-$statStream = start-threadjob {
-  $opts = @{sampleinterval = $using:freqSec}
-  if($using:numIters -eq 0) {
-    $opts.continuous = $true
-  } else {
-    $opts.max = $using:numIters
-  }
-  get-counter $using:hypervStats @opts -erroraction silentlycontinue | select -expand countersamples | &{ process {
-    if($using:onlyTotals) {
-      if(-not ($_.instancename -in ("_total", ""))) {
-				#return
-			}
-		}
-# alternation with shortcircuit hopefully works, first choice matches multisource group with source in parentheses, second choice matches single-source group without any parentheses, first choice allows multisource group itself to have parentheses, second choice assumes unique-source group cannot end in parentheses
+function printStatNames {
+  $statsLookup.getenumerator() |
+  sort {$_.value.index} |
+  select -expand value |
+  &{ process { "index " + $_.index + " stat """ + $_.name + """ group """ + $_.group + """ source " + $_.source }}
+
+}
+
+function lookupReportedStatPath {
+  param (
+    $valuefrompipeline = $true
+  )
+
+  process {
+# choice order in alternation hopefully works because both match length of both choices are equal, first choice matches multisource group with source in parentheses, second choice matches single-source group without any parentheses, first choice allows multisource group itself to have parentheses, second choice assumes unique-source group cannot end in parentheses
     $reportedPathPattern = "^\\\\(?<host>[^\\]+)\\(((?<group>[^\\]+)\((?<source>[^)]+)\))|(?<group>[^\\]+))\\(?<name>[^\\]+)$" 
     if(-not ($_.path -match $reportedPathPattern)) {
       return [pscustomobject]@{
-        path = $_.path;
+        path = $_.path
         error = "failed regex match for reported stat path ""$($_.path)"""
       }
-		}
+    }
     $key = $matches.group + "\" + $matches.name
-	  if(-not ($using:statsLookup).containskey($key)) {
+    if(-not $statsLookup.containskey($key)) {
       return [pscustomobject]@{
-        path = $_.path;
-				group = $matches.group
-				name = $matches.name
+        path = $_.path
+        group = $matches.group
+        name = $matches.name
         error = "failed stat lookup for key ""$key"""
       }
-	  }
-		$source = $_.instancename ?? "unique"
-    if(($using:statsLookup)[$key].lastVals[$source] -eq $_.cookedvalue) {
-      return
     }
-  [pscustomobject]@{
-    path = $_.path;
-		key = $key;
-    name = $matches.name;
-    source = $source;
-    val = $_.cookedvalue;
-    change = $_.cookedvalue - ($using:statsLookup)[$key].lastVals[$source];
-    error = $null
-	}
-  ($using:statsLookup)[$key].lastVals[$source] = $_.cookedvalue
-}}
+    $source = $_.instancename ?? "unique"
+    [pscustomobject]@{
+      key = $key
+      source = $source
+      val = $_.cookedvalue
+    }
+  }
+}
+
+function printInitialStats {
+
+  $allStats = [list[string]]@()
+  $statsLookup.getenumerator() | % {$allStats.add($_.value.path)}
+
+  get-counter $allStats -erroraction silentlycontinue |
+  &{ process {$timestamp = $_.timestamp; $_}} |
+  select -expand countersamples |
+  lookupReportedStatPath |
+  ? {$_.source -in ("_total", "unique")} |
+  &{ process {
+    $stat = $statsLookup[$_.key]
+    $stat.lastVals[$_.source] = $_.val
+   "" + $_.val + "`t" + $stat.name + "`t" + $_.source + "`t" + $stat.group
+  }}
 
 }
 
-receive-job -wait $statStream | &{ process {"got stat ""$_"""}}
+function getStatUpdates {
+
+  $allStats = [list[string]]@()
+  $statsLookup.getenumerator() | % {$allStats.add($_.value.path)}
+
+  $iteration = 1
+
+  get-counter $allStats -max 4 -erroraction silentlycontinue |
+  &{ process {
+    $intervalSeconds = ($_.timestamp - $timestamp).totalseconds
+    $timestamp = $_.timestamp
+
+    write-information -informationaction continue ""
+    write-information -informationaction continue "Iteration $iteration"
+    write-information -informationaction continue "time $($_.timestamp.tostring("yyyy-MM-dd_HH:mm:ss.ffffffK")) interval_sec $intervalSeconds"
+    write-information -informationaction continue ""
+    ++$iteration
+    $_.countersamples |
+    lookupReportedStatPath |
+    ? {$_.source -in ("_total", "unique")} |
+    &{ process {
+      $stat = $statsLookup[$_.key]
+      $lastVal = $stat.lastVals[$_.source]
+      if($_.val -eq $lastVal) {
+        return
+      }
+      $change = $_.val - $lastVal
+      $pctChange = if($lastVal -ne 0) { $change / $lastVal * 100 } else {"Inf" }
+      $ratePerSec = $change / $intervalSeconds
+      [pscustomobject]@{
+        name = $stat.name
+        rate_per_sec = $ratePerSec
+        pct_change = $pctChange
+        change = $change
+        new_value = $_.val
+        old_value = $lastVal
+        source = $_.source
+        group = $stat.group
+      }
+      $stat.lastVals[$_.source] = $_.val
+    }} |
+    sort rate_per_sec -descending |
+    ft -auto
+  }}
 
 }
-
-<#
-2023-08-03_10:14:45.572138_CDT: Iteration 0: Initial IRQ counts
-cpu_count 4
-irq_id 8 irq_counts 0 0 0 0
-irq_id 9 irq_counts 192 0 0 0
-
-irq.cpu HVS.0 rate_per_sec 17.87 pct_change 0.00 change 179 old_count 603123807 new_count 603123986
-
-name "timer interrupts/sec" initial_val 45678 group "hyper-v hypervisor logical processor"
-name "% total run time" initial_val 391 group "hyper-v hypervisor logical processor"
-
-id 0 name "timer interrupts/sec" rate_per_sec 17.87 pct_change 0.12 change 179 old_val 123807 new_val 23456 sources "lp 1"
-name "timer interrupts/sec" rate_per_sec 17.87 pct_change 0.12 change 179 old_val 123807 new_val 23456 sources "sum of lp 1-4"
-name "timer interrupts/sec" rate_per_sec 17.87 pct_change 0.12 change 179 old_val 123807 new_val 23456 sources "unique"
-
-$statsByName = @{}
-$stat = $statsLookup[$statPath]
-$stat.name = $statName
-$stat.val = $statVal
-
-function initHypervStats {
-  epochMicro=$(date +%s.%6N)
-  read -a cpus
-  numCpus=${#cpus[*]}
-
-  local -a fields
-  while read -a fields; do
-    local irq=${fields[0]%:}
-    irqIds+=($irq)
-    irqNames[$irq]=${fields[*]:$numCpus + 1}
-# create dynamic arrays per IRQ to hold counts
-    declare -g -a irqCounts_$irq
-# can only use dynamic arrays through nameref
-    local -n arrayRef=irqCounts_$irq
-    arrayRef=(${fields[*]:1:$numCpus})
-  done
-}
-#>
 
 top
-printHypervStats
+""
 
-<#
-for($iteration = 1; $numIters -eq 0 -or $iteration < $numIters; ++$iteration) {
-  sleep $freqSec
-  printIterationInfo
-  printHypervStats
-}
-#>
+getStatNames
+
+"Stat names"
+printStatNames
+""
+
+"Initial stats"
+printInitialStats
+""
+
+"Incremental changes"
+getStatUpdates
+""
+
