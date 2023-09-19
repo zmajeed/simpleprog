@@ -2,7 +2,8 @@
 
 # hvsaction2.sh
 
-# Monitors WSL Hyper-V interrupt counts and prints stats at regular intervals
+# dumps stats from files in /sys/kernel/debug/hvtimer
+# run with sudo
 
 ################################################################################
 # MIT License
