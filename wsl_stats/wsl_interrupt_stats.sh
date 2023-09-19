@@ -29,14 +29,15 @@
 ################################################################################
 
 function usage {
-  echo "Usage: wsl_interrupt_stats.sh [-h] [-n num_iterations] [-f frequency] [-z timezone]"
+  echo "Usage: wsl_interrupt_stats.sh [-h] [-n num_iterations] [-f frequency] [-a action_script:thresholds] [-z timezone]"
   echo "Monitors WSL interrupt counts and prints stats at regular intervals"
+  echo "-a: action_script from same source directory as this script, comma-separated list of integer threshold values to trigger action_script"
   echo "-n: number of iterations, default is 0 for unlimited"
   echo "-f: frequency in seconds, default is 10.0 seconds"
   echo "-z: timezone for logging, default America/Chicago"
   echo "-h: help"
   echo "Examples:"
-  echo "wsl_interrupt_stats.sh -n 10 -f 5"
+  echo "sudo wsl_interrupt_stats.sh -n 10 -f 5 -a hvsaction2.sh:10000,100000,200000,300000,400000,500000 -z America/New_York"
 }
 
 function log {
@@ -236,7 +237,7 @@ function doHVSAction {
     local hvsActionLog=hvsaction.iteration.$iteration.$(TZ=$timezone date +%Y%m%d_%H%M%S.%3N_%Z).log
     stdbuf -oL $hvsAction >$hvsActionLog 2>&1&
     local hvsActionPid=$!
-    log "Iteration $iteration: hvs_alert_actions: Run $hvsAction pid $hvsActionPid log $hvsActionLog"
+    log "Iteration $iteration: hvs_alert_actions: Run $(basename $hvsAction) pid $hvsActionPid log $hvsActionLog"
     jobs -nl
     ls -l $hvsActionLog
     echo
@@ -246,11 +247,44 @@ function doHVSAction {
 
 }
 
+function doHVSAction2 {
+
+  local hvsActionLog=$(basename ${hvsAction%.*}).iteration.$iteration.$(TZ=$timezone date +%Y%m%d_%H%M%S.%3N_%Z).log
+  $hvsAction -z $timezone $iteration >$hvsActionLog 2>&1&
+  local hvsActionPid=$!
+  log "Iteration $iteration: hvs_alert_actions: Run $(basename $hvsAction) pid $hvsActionPid log $hvsActionLog"
+  jobs -nl
+  ls -l $hvsActionLog
+}
+
 function hvsAlert {
+  ((thresholdIdx == ${#hvsRateThresholds[*]})) && return
+  hvsRateThreshold=${hvsRateThresholds[thresholdIdx]}
+
   local i
   for ((i = 0; i < ${#irqRates_HVS[*]}; ++i)); do
-    (( ${irqRates_HVS[i]%%.*} < hvsRateThreshold )) && continue
-    log "Iteration $iteration: HVS.$i IRQ rate ${irqRates_HVS[i]} exceeds alert threshold $hvsRateThreshold"
+    local hvsRate=${irqRates_HVS[i]}
+    local hvsRateInt=${hvsRate%%.*}
+    (( hvsRateInt >= hvsRateThreshold )) && break
+  done
+
+  (( i == ${#irqRates_HVS[*]} )) && return
+
+  log "Iteration $iteration: Run hvs_alert_actions because HVS.$i IRQ rate $hvsRate exceeds alert threshold[$thresholdIdx] $hvsRateThreshold"
+  echo
+  let ++thresholdIdx
+  doHVSAction2
+  log "Iteration $iteration: Done hvs_alert_actions"
+  echo
+}
+
+function hvsAlert1 {
+  local i
+  for ((i = 0; i < ${#irqRates_HVS[*]}; ++i)); do
+    local hvsRate=${irqRates_HVS[i]}
+    local hvsRateInt=${hvsRate%%.*}
+    (( hvsRateInt < hvsRateThreshold )) && continue
+    log "Iteration $iteration: HVS.$i IRQ rate $hvsRate exceeds alert threshold $hvsRateThreshold"
     doHVSAction
     break
   done
@@ -278,12 +312,15 @@ function printIterationInfo {
   echo
 }
 
+declare -a hvsRateThresholds
+thresholdIdx=0
+
 while getopts "a:df:hn:z:" opt; do
   case $opt in
     a) actionParams=(${OPTARG//:/ })
       hvsAction=${actionParams[0]}
-      hvsRateThreshold=${actionParams[1]}
-      hvsActionBackoffSec=${actionParams[2]}
+      hvsRateThresholds=(${actionParams[1]//,/ })
+      #hvsActionBackoffSec=${actionParams[2]}
       ;;
     d) debug=true;;
     f) freqSec=$OPTARG;;
@@ -302,7 +339,6 @@ shift $((OPTIND-1))
 : ${numIters:=0}
 : ${timezone:=America/Chicago}
 : ${numTop:=5}
-: ${hvsRateThreshold:=10}
 
 if [[ -n $hvsAction ]]; then
   hvsAction=$(dirname ${BASH_SOURCE[0]})/$hvsAction
@@ -325,7 +361,7 @@ declare numCpus=0
 declare -a irqIds
 declare -A irqNames
 
-log "Start WSL interrupt stats, frequency_secs $freqSec, num_iterations $numIters, hvs_rate_threshold $hvsRateThreshold"
+log "Start WSL interrupt stats, frequency_secs $freqSec, num_iterations $numIters, hvs_rate_thresholds [${hvsRateThresholds[*]}]"
 echo
 printSystemInfo
 
