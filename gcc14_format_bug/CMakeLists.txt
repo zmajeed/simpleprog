@@ -16,7 +16,13 @@ FetchContent_MakeAvailable(fmt)
 
 add_executable(gcc14_format_bug gcc14_format_bug.cpp)
 
-target_compile_options(gcc14_format_bug PRIVATE -Wall -Werror -Wextra -O0 -ggdb3 -gdwarf-5 -std=c++23)
+target_compile_options(gcc14_format_bug PRIVATE -std=c++23 -Wall -Werror -Wextra)
+target_compile_options(gcc14_format_bug PRIVATE $<$<CONFIG:debug>: -O0 -ggdb3 -gdwarf-5>)
+target_compile_options(gcc14_format_bug PRIVATE $<$<CONFIG:release>: -Og>)
 
 target_link_libraries(gcc14_format_bug fmt)
 
+if(MINGW)
+# gcc-14 print library needs -lstdc++exp on Windows
+  target_link_libraries(gcc14_format_bug stdc++exp)
+endif()
