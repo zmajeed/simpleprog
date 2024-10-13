@@ -2,14 +2,13 @@
 
 ## Summary
 
-Slides 103-104 from the talk at https://youtu.be/XfU2ZODl6EU?t=4525 at 1:15:25 mark show the impact of virtual functions on executable size
+Slides 103-104 from the 1:15:25 mark of the talk at https://youtu.be/XfU2ZODl6EU?t=4525 show the impact of virtual functions on executable size
 
-A small class is compiled with and without virtual functions. Exectuable size is shown to increase from 16 KB without virtual functions to 281 KB with just a virtual destructor. Additional virtual functions increase binary size by tiny amounts
-
+A small class is compiled with and without virtual functions. A global array of 10,000 objects of the class is zero-initialized. Exectuable size is shown to increase from 16 KB without virtual functions to 281 KB with just a virtual destructor. Additional virtual functions increase binary size by tiny amounts
 
 We see similar effects in our test with GCC-14 on Ubuntu 24.04. In fact our executables blow up from 16 KB to 498 KB.
 
-I don't know why our executables with virtual functions have an extra 217 KB compared to the executables from the talk. I believe the speaker ran his tests on Mac while our results are on Linux. For some reason adding virtual functions caused the .data section to grow and the .bss section to shrink on Linux.
+Executables with virtual functions in our test have an extra 217 KB compared to the executables from the talk. I believe the speaker ran his tests on Mac while our results are on Linux. For some reason adding virtual functions caused the .data section to grow and the .bss section to shrink on Linux.
 
 
 ## Slides from the talk
@@ -36,7 +35,7 @@ private:
 ## Slide 104
 
 |   Version         | Binary size |
-|-------------------|-------------|
+|   -------         | ----------: |
 | no virtual        |    16,879   |
 | only virtual dtor |   281,505   |
 | one virtual       |   281,553   |
@@ -103,7 +102,7 @@ cmake -B build -S .
 make -C build
 ```
 
-The gcc-14 command is
+The generated gcc-14 command is
 
 ```
 g++ -std=c++23 -Wall -Werror -Wextra -Os
