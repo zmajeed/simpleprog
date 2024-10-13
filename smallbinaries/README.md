@@ -1,4 +1,4 @@
-# Notes on How To Keep C++ Binaries Small, C++ on Sea 2024
+# A Note on How To Keep C++ Binaries Small, C++ on Sea 2024
 
 ## Summary
 
