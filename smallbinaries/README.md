@@ -9,7 +9,7 @@ A small class is compiled with and without virtual functions. Exectuable size is
 
 We see similar effects in our test with GCC-14 on Ubuntu 24.04. In fact our executables blow up from 16 KB to 498 KB.
 
-I don't know why our executables with virtual functions have an extra 217 KB - might be related to platform differences between Linux used by us and Mac used in the talk
+I don't know why our executables with virtual functions have an extra 217 KB compared to the executables from the talk. I believe the speaker ran his tests on Mac while our results are on Linux. For some reason adding virtual functions caused the .data section to grow and the .bss section to shrink on Linux.
 
 
 ## Slides from the talk
